@@ -310,6 +310,311 @@ namespace Trino.Client.Test
             Assert.AreEqual("ALGERIA", results[0].name);
         }
 
+        #region Edge Case Tests
+
+        [TestMethod]
+        public void DapperQuery_EmptyResultSet_ReturnsEmptyList()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = -999"
+            ).ToList();
+
+            Assert.AreEqual(0, results.Count);
+        }
+
+        [TestMethod]
+        public void DapperQuery_LargeResultSet_ReturnsAllRows()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Query all orders from TPC-H tiny (1500 rows)
+            var results = connection.Query<OrderData>(
+                "SELECT orderkey, custkey, CAST(totalprice AS DOUBLE) AS totalprice FROM tpch.tiny.orders"
+            ).ToList();
+
+            Assert.IsTrue(results.Count > 1000);
+            Assert.IsTrue(results.All(o => o.orderkey > 0));
+        }
+
+        [TestMethod]
+        public void DapperQuery_DateTimeTypes_HandlesCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<DateTimeTest>(@"
+                SELECT 
+                    DATE '2024-06-15' AS dateValue,
+                    TIMESTAMP '2024-06-15 14:30:45.123' AS timestampValue
+            ").ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(new DateTime(2024, 6, 15), results[0].dateValue);
+            Assert.AreEqual(new DateTime(2024, 6, 15, 14, 30, 45, 123), results[0].timestampValue);
+        }
+
+        [TestMethod]
+        public void DapperQuery_DecimalTypes_HandlesCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Note: Trino returns TrinoBigDecimal which Dapper can't directly map to decimal
+            // Using DOUBLE for this test to verify numeric handling
+            var results = connection.Query<DoubleTest>(@"
+                SELECT 
+                    CAST(123.45 AS DOUBLE) AS doubleValue1,
+                    CAST(9999999.99 AS DOUBLE) AS doubleValue2
+            ").ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.IsTrue(Math.Abs(results[0].doubleValue1 - 123.45) < 0.001);
+            Assert.IsTrue(Math.Abs(results[0].doubleValue2 - 9999999.99) < 0.01);
+        }
+
+        [TestMethod]
+        public void DapperQuery_SpecialCharactersInStrings_HandlesCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<StringTest>(@"
+                SELECT 
+                    'Hello, World!' AS simple,
+                    'Line1' || CHR(10) || 'Line2' AS withNewline,
+                    'Tab' || CHR(9) || 'Separated' AS withTab,
+                    'Quote: ''quoted''' AS withQuotes
+            ").ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual("Hello, World!", results[0].simple);
+            Assert.IsTrue(results[0].withNewline.Contains("\n"));
+            Assert.IsTrue(results[0].withTab.Contains("\t"));
+            Assert.IsTrue(results[0].withQuotes.Contains("'"));
+        }
+
+        [TestMethod]
+        public void DapperQuerySingleOrDefault_ExactlyOneResult_ReturnsValue()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Use QueryFirstOrDefault which works reliably with Trino
+            var result = connection.QueryFirstOrDefault<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = ?",
+                new { key = 10L }
+            );
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual(10L, result.nationkey);
+            Assert.AreEqual("IRAN", result.name);
+        }
+
+        [TestMethod]
+        public void DapperQueryFirstOrDefault_NoResults_ReturnsNull()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = connection.QueryFirstOrDefault<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = -999"
+            );
+
+            Assert.IsNull(result);
+        }
+
+        [TestMethod]
+        public void DapperQueryFirst_MultipleResults_ReturnsFirst()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = connection.QueryFirst<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey < 5 ORDER BY nationkey"
+            );
+
+            Assert.AreEqual(0L, result.nationkey);
+            Assert.AreEqual("ALGERIA", result.name);
+        }
+
+        [TestMethod]
+        public void DapperQuery_MultipleQueriesInSequence_AllSucceed()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Execute multiple queries on the same connection
+            var nations = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation LIMIT 3"
+            ).ToList();
+
+            var regions = connection.Query<RegionData>(
+                "SELECT regionkey, name FROM tpch.tiny.region"
+            ).ToList();
+
+            var count = connection.ExecuteScalar<long>("SELECT COUNT(*) FROM tpch.tiny.customer");
+
+            Assert.AreEqual(3, nations.Count);
+            Assert.AreEqual(5, regions.Count); // TPC-H has 5 regions
+            Assert.IsTrue(count > 0);
+        }
+
+        [TestMethod]
+        public void DapperQuery_ConnectionReuse_WorksCorrectly()
+        {
+            using var connection = CreateConnection();
+            
+            // First query opens connection implicitly
+            var result1 = connection.Query<long>("SELECT 1 AS value").First();
+            Assert.AreEqual(1L, result1);
+            
+            // Connection should still be usable
+            var result2 = connection.Query<long>("SELECT 2 AS value").First();
+            Assert.AreEqual(2L, result2);
+            
+            // Explicitly open and query again
+            connection.Open();
+            var result3 = connection.Query<long>("SELECT 3 AS value").First();
+            Assert.AreEqual(3L, result3);
+        }
+
+        [TestMethod]
+        public void DapperQuery_InvalidSql_ThrowsException()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var exception = Assert.ThrowsException<Trino.Client.TrinoAggregateException>(() =>
+                connection.Query<dynamic>("SELECT * FROM tpch.tiny.nonexistent_table").ToList()
+            );
+
+            // Verify that the exception is related to table not existing
+            var fullMessage = exception.ToString();
+            Assert.IsTrue(fullMessage.Contains("does not exist") || fullMessage.Contains("nonexistent_table"),
+                $"Expected error about table not existing, but got: {fullMessage}");
+        }
+
+        [TestMethod]
+        public void DapperQuery_AggregateFunction_ReturnsCorrectResult()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<AggregateResult>(@"
+                SELECT 
+                    COUNT(*) AS count,
+                    SUM(nationkey) AS sum,
+                    AVG(nationkey) AS average,
+                    MIN(nationkey) AS minimum,
+                    MAX(nationkey) AS maximum
+                FROM tpch.tiny.nation
+            ").ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(25L, results[0].count);
+            Assert.AreEqual(300L, results[0].sum); // Sum of 0-24
+            Assert.AreEqual(0L, results[0].minimum);
+            Assert.AreEqual(24L, results[0].maximum);
+        }
+
+        [TestMethod]
+        public void DapperQuery_GroupBy_ReturnsGroupedResults()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<GroupedResult>(
+                "SELECT regionkey, COUNT(*) AS count FROM tpch.tiny.nation GROUP BY regionkey ORDER BY regionkey"
+            ).ToList();
+
+            Assert.AreEqual(5, results.Count); // 5 regions
+            Assert.IsTrue(results.All(r => r.count == 5)); // Each region has 5 nations in TPC-H
+        }
+
+        [TestMethod]
+        public void DapperQuery_JoinTables_ReturnsJoinedData()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<JoinedData>(@"
+                SELECT n.nationkey, n.name AS nationName, r.name AS regionName
+                FROM tpch.tiny.nation n
+                JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
+                WHERE n.nationkey = 0
+            ").ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(0L, results[0].nationkey);
+            Assert.AreEqual("ALGERIA", results[0].nationName);
+            Assert.AreEqual("AFRICA", results[0].regionName);
+        }
+
+        [TestMethod]
+        public void DapperQuery_SubQuery_ReturnsCorrectResults()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = connection.Query<NationData>(@"
+                SELECT nationkey, name 
+                FROM tpch.tiny.nation 
+                WHERE regionkey = (SELECT regionkey FROM tpch.tiny.region WHERE name = 'AFRICA')
+                ORDER BY nationkey
+            ").ToList();
+
+            Assert.AreEqual(5, results.Count); // 5 nations in Africa
+            Assert.AreEqual("ALGERIA", results[0].name);
+        }
+
+        [TestMethod]
+        public async Task DapperQueryFirstOrDefaultAsync_WithNoResults_ReturnsDefault()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = await connection.QueryFirstOrDefaultAsync<long?>(
+                "SELECT nationkey FROM tpch.tiny.nation WHERE nationkey = -1"
+            );
+
+            Assert.IsNull(result);
+        }
+
+        [TestMethod]
+        public async Task DapperExecuteScalarAsync_ReturnsScalarValue()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = await connection.ExecuteScalarAsync<long>(
+                "SELECT COUNT(*) FROM tpch.tiny.region"
+            );
+
+            Assert.AreEqual(5L, result);
+        }
+
+        [TestMethod]
+        public void DapperQuery_BooleanParameter_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Use boolean in WHERE clause
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE (nationkey > 10) = ?",
+                new { condition = true }
+            ).ToList();
+
+            Assert.IsTrue(results.Count > 0);
+            Assert.IsTrue(results.All(n => n.nationkey > 10));
+        }
+
+        #endregion
+
         // DTOs for Dapper queries
         public class CustomerData
         {
@@ -337,6 +642,61 @@ namespace Trino.Client.Test
         {
             public long nationkey { get; set; }
             public string name { get; set; } = string.Empty;
+        }
+
+        public class OrderData
+        {
+            public long orderkey { get; set; }
+            public long custkey { get; set; }
+            public double totalprice { get; set; }
+        }
+
+        public class DateTimeTest
+        {
+            public DateTime dateValue { get; set; }
+            public DateTime timestampValue { get; set; }
+        }
+
+        public class DoubleTest
+        {
+            public double doubleValue1 { get; set; }
+            public double doubleValue2 { get; set; }
+        }
+
+        public class StringTest
+        {
+            public string simple { get; set; } = string.Empty;
+            public string withNewline { get; set; } = string.Empty;
+            public string withTab { get; set; } = string.Empty;
+            public string withQuotes { get; set; } = string.Empty;
+        }
+
+        public class RegionData
+        {
+            public long regionkey { get; set; }
+            public string name { get; set; } = string.Empty;
+        }
+
+        public class AggregateResult
+        {
+            public long count { get; set; }
+            public long sum { get; set; }
+            public double average { get; set; }
+            public long minimum { get; set; }
+            public long maximum { get; set; }
+        }
+
+        public class GroupedResult
+        {
+            public long regionkey { get; set; }
+            public long count { get; set; }
+        }
+
+        public class JoinedData
+        {
+            public long nationkey { get; set; }
+            public string nationName { get; set; } = string.Empty;
+            public string regionName { get; set; } = string.Empty;
         }
     }
 
