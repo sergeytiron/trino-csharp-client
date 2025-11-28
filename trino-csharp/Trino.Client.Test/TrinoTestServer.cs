@@ -34,10 +34,18 @@ namespace Trino.Client.Test
 
         private void StartServer(string testFile, TimeSpan waitBetweenResponses)
         {
-            // Check testFile exists before starting
+            // Check testFile exists before starting, also try in scripts directory
             if (!File.Exists(testFile))
             {
-                throw new FileNotFoundException(testFile);
+                var scriptsPath = Path.Combine("scripts", testFile);
+                if (File.Exists(scriptsPath))
+                {
+                    testFile = scriptsPath;
+                }
+                else
+                {
+                    throw new FileNotFoundException(testFile);
+                }
             }
 
             this.serverTask = new Task(() =>
