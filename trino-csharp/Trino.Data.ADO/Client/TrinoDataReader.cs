@@ -313,7 +313,9 @@ namespace Trino.Data.ADO.Client
 
         public override bool NextResult()
         {
-            throw new NotSupportedException("Trino supports only a single result per query.");
+            // Trino supports only a single result per query.
+            // Return false to indicate there are no more result sets.
+            return false;
         }
 
         /// <summary>

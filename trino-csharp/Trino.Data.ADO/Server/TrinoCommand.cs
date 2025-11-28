@@ -208,26 +208,28 @@ namespace Trino.Data.ADO.Server
 	    protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
         {
             RecordExecutor queryExecutor;
-            switch (behavior)
+
+            // CommandBehavior is a flags enum, so we need to check for specific flags
+            // rather than exact matches. We handle the primary behaviors and ignore
+            // hints like SequentialAccess and KeyInfo that don't apply to Trino.
+            bool schemaOnly = (behavior & CommandBehavior.SchemaOnly) == CommandBehavior.SchemaOnly;
+            bool singleRow = (behavior & CommandBehavior.SingleRow) == CommandBehavior.SingleRow;
+
+            if (schemaOnly)
             {
-                case CommandBehavior.Default:
-                // Single result means only run one query. Trino only supports one query.
-                case CommandBehavior.SingleResult:
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    break;
-                case CommandBehavior.SingleRow:
-                    // Single row requires the reader to be created and the first row to be read.
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    return new TrinoDataReader(queryExecutor);
-                case CommandBehavior.SchemaOnly:
-                    queryExecutor = await RunNonQuery().ConfigureAwait(false);
-                    break;
-                case CommandBehavior.CloseConnection:
-                    // Trino has no concept of a connection because every call is a new connection.
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    break;
-                default:
-                    throw new NotSupportedException();
+                queryExecutor = await RunNonQuery().ConfigureAwait(false);
+            }
+            else if (singleRow)
+            {
+                // Single row requires the reader to be created and the first row to be read.
+                queryExecutor = await RunQuery().ConfigureAwait(false);
+                return new TrinoDataReader(queryExecutor);
+            }
+            else
+            {
+                // Default, SingleResult, CloseConnection, SequentialAccess, KeyInfo
+                // all execute a normal query. Trino only supports one query per command.
+                queryExecutor = await RunQuery().ConfigureAwait(false);
             }
 
             // always wait for the schema when creating an IEnumerable
