@@ -214,6 +214,102 @@ namespace Trino.Client.Test
             Assert.AreEqual(1, results.Count);
         }
 
+        [TestMethod]
+        public void DapperQuery_WithParameters_FiltersByValue()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Use Dapper with anonymous object for parameters
+            // Note: Trino uses positional parameters with ?, Dapper will map named params in order
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = ?",
+                new { nationkey = 5L }
+            ).ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(5L, results[0].nationkey);
+            Assert.AreEqual("ETHIOPIA", results[0].name);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithMultipleParameters_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Query with multiple positional parameters
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey >= ? AND nationkey <= ? ORDER BY nationkey",
+                new { min = 10L, max = 15L }
+            ).ToList();
+
+            Assert.AreEqual(6, results.Count);
+            Assert.AreEqual(10L, results[0].nationkey);
+            Assert.AreEqual(15L, results[5].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithStringParameter_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Query with string parameter using LIKE
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE name LIKE ?",
+                new { pattern = "UNITED%" }
+            ).ToList();
+
+            Assert.AreEqual(2, results.Count); // UNITED KINGDOM, UNITED STATES
+            Assert.IsTrue(results.All(n => n.name.StartsWith("UNITED")));
+        }
+
+        [TestMethod]
+        public void DapperQueryFirst_WithParameter_ReturnsMatchingRow()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = connection.QueryFirst<CustomerData>(
+                "SELECT custkey, name, nationkey FROM tpch.tiny.customer WHERE custkey = ?",
+                new { id = 1L }
+            );
+
+            Assert.AreEqual(1L, result.custkey);
+        }
+
+        [TestMethod]
+        public void DapperExecuteScalar_WithParameter_ReturnsFilteredCount()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Count nations in a specific region
+            var count = connection.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM tpch.tiny.nation WHERE regionkey = ?",
+                new { regionkey = 1L }
+            );
+
+            Assert.IsTrue(count > 0);
+        }
+
+        [TestMethod]
+        public async Task DapperQueryAsync_WithParameter_ReturnsResultsAsynchronously()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = (await connection.QueryAsync<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = ?",
+                new { key = 0L }
+            )).ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(0L, results[0].nationkey);
+            Assert.AreEqual("ALGERIA", results[0].name);
+        }
+
         // DTOs for Dapper queries
         public class CustomerData
         {

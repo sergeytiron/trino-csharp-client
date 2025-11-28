@@ -285,13 +285,13 @@ namespace Trino.Data.ADO.Server
 
         /// <summary>
         /// Creates and returns a new parameter object.
+        /// Note: Following standard ADO.NET pattern, this does NOT add the parameter to the collection.
+        /// The caller must explicitly add the parameter using Parameters.Add().
         /// </summary>
         /// <returns>A new DbParameter object.</returns>
         protected override DbParameter CreateDbParameter()
         {
-            var parameter = new TrinoParameter();
-            parameters.Add(parameter);
-            return parameter;
+            return new TrinoParameter();
         }
 
         /// <summary>
