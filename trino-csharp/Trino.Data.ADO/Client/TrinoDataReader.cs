@@ -290,10 +290,19 @@ namespace Trino.Data.ADO.Client
         {
             var value = records.GetValue<object>(i);
             
-            // Automatically convert TrinoBigDecimal to decimal for Dapper compatibility
+            // Automatically convert TrinoBigDecimal to decimal for Dapper compatibility.
+            // If the value is too large for decimal (OverflowException), return as string representation.
             if (value is TrinoBigDecimal bigDecimal)
             {
-                return bigDecimal.ToDecimal();
+                try
+                {
+                    return bigDecimal.ToDecimal();
+                }
+                catch (OverflowException)
+                {
+                    // Return string representation for values that exceed decimal range
+                    return bigDecimal.ToString();
+                }
             }
             
             return value;
