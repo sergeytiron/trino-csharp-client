@@ -450,7 +450,7 @@ namespace Trino.Client.Test
 
             // Query all orders from TPC-H tiny (1500 rows)
             var results = connection.Query<OrderData>(
-                "SELECT orderkey, custkey, CAST(totalprice AS DOUBLE) AS totalprice FROM tpch.tiny.orders"
+                "SELECT orderkey, custkey, totalprice FROM tpch.tiny.orders"
             ).ToList();
 
             Assert.IsTrue(results.Count > 1000);
@@ -480,17 +480,16 @@ namespace Trino.Client.Test
             using var connection = CreateConnection();
             connection.Open();
 
-            // Note: Trino returns TrinoBigDecimal which Dapper can't directly map to decimal
-            // Using DOUBLE for this test to verify numeric handling
-            var results = connection.Query<DoubleTest>(@"
+            // Trino returns TrinoBigDecimal which is now automatically converted to decimal
+            var results = connection.Query<DecimalTest>(@"
                 SELECT 
-                    CAST(123.45 AS DOUBLE) AS doubleValue1,
-                    CAST(9999999.99 AS DOUBLE) AS doubleValue2
+                    CAST(123.45 AS DECIMAL(10,2)) AS decimalValue1,
+                    CAST(9999999.99 AS DECIMAL(15,2)) AS decimalValue2
             ").ToList();
 
             Assert.AreEqual(1, results.Count);
-            Assert.IsTrue(Math.Abs(results[0].doubleValue1 - 123.45) < 0.001);
-            Assert.IsTrue(Math.Abs(results[0].doubleValue2 - 9999999.99) < 0.01);
+            Assert.AreEqual(123.45m, results[0].decimalValue1);
+            Assert.AreEqual(9999999.99m, results[0].decimalValue2);
         }
 
         [TestMethod]
@@ -955,7 +954,7 @@ namespace Trino.Client.Test
         {
             public long orderkey { get; set; }
             public long custkey { get; set; }
-            public double totalprice { get; set; }
+            public decimal totalprice { get; set; }
         }
 
         public class DateTimeTest
@@ -964,10 +963,10 @@ namespace Trino.Client.Test
             public DateTime timestampValue { get; set; }
         }
 
-        public class DoubleTest
+        public class DecimalTest
         {
-            public double doubleValue1 { get; set; }
-            public double doubleValue2 { get; set; }
+            public decimal decimalValue1 { get; set; }
+            public decimal decimalValue2 { get; set; }
         }
 
         public class StringTest

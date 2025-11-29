@@ -81,7 +81,7 @@ namespace Trino.Data.ADO.Client
         {
             get
             {
-                return records.GetValue<object>(i);
+                return GetValue(i);
             }
         }
 
@@ -89,7 +89,7 @@ namespace Trino.Data.ADO.Client
         {
             get
             {
-                return records.GetValue<object>(GetOrdinal(name));
+                return GetValue(GetOrdinal(name));
             }
         }
 
@@ -288,7 +288,15 @@ namespace Trino.Data.ADO.Client
 
         public override object GetValue(int i)
         {
-            return records.GetValue<object>(i);
+            var value = records.GetValue<object>(i);
+            
+            // Automatically convert TrinoBigDecimal to decimal for Dapper compatibility
+            if (value is TrinoBigDecimal bigDecimal)
+            {
+                return bigDecimal.ToDecimal();
+            }
+            
+            return value;
         }
 
         public override int GetValues(object[] values)
@@ -300,7 +308,7 @@ namespace Trino.Data.ADO.Client
 
             for (int i = 0; values != null && i < values.Length && i < records.Columns.Count; i++)
             {
-                values[i] = records.GetValue<object>(i);
+                values[i] = GetValue(i);
             }
             return values.Length;
         }
