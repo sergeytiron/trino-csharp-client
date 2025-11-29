@@ -325,7 +325,12 @@ namespace Trino.Data.ADO.Server
                             }
                             
                             // Build the replacement string (e.g., "?, ?, ?")
-                            string replacement = string.Join(", ", new string('?', listParams.Count).ToCharArray());
+                            var placeholders = new string[listParams.Count];
+                            for (int i = 0; i < placeholders.Length; i++)
+                            {
+                                placeholders[i] = "?";
+                            }
+                            string replacement = string.Join(", ", placeholders);
                             
                             // Replace the named parameter with the expanded placeholders
                             int startIndex = match.Index + offset;
