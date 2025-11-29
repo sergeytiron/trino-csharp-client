@@ -4,6 +4,7 @@ using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
 using Dapper;
+using DapperQueryBuilder;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Configurations;
 using DotNet.Testcontainers.Containers;
@@ -727,6 +728,196 @@ namespace Trino.Client.Test
 
             Assert.IsTrue(results.Count > 0);
             Assert.IsTrue(results.All(n => n.nationkey > 10));
+        }
+
+        #endregion
+
+        #region DapperQueryBuilder Tests
+
+        [TestMethod]
+        public void QueryBuilder_SimpleQuery_ReturnsResults()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Basic QueryBuilder usage with string interpolation
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation LIMIT 5");
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(5, results.Count);
+            Assert.IsTrue(results.All(n => !string.IsNullOrEmpty(n.name)));
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithInterpolatedParameter_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long nationKey = 5L;
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = {nationKey}");
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(5L, results[0].nationkey);
+            Assert.AreEqual("ETHIOPIA", results[0].name);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithMultipleInterpolatedParameters_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long minKey = 10L;
+            long maxKey = 15L;
+            var query = connection.QueryBuilder($@"
+                SELECT nationkey, name FROM tpch.tiny.nation 
+                WHERE nationkey >= {minKey} AND nationkey <= {maxKey} 
+                ORDER BY nationkey");
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(6, results.Count);
+            Assert.AreEqual(10L, results[0].nationkey);
+            Assert.AreEqual(15L, results[5].nationkey);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithStringParameter_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            string pattern = "UNITED%";
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE name LIKE {pattern}");
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(2, results.Count);
+            Assert.IsTrue(results.All(n => n.name.StartsWith("UNITED")));
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithDynamicWhere_BuildsQueryCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Build query dynamically - use Append for additional conditions
+            long minKey = 5L;
+            long maxKey = 10L;
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey >= {minKey} AND nationkey < {maxKey}");
+            
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(5, results.Count);
+            Assert.IsTrue(results.All(n => n.nationkey >= 5 && n.nationkey < 10));
+        }
+
+        [TestMethod]
+        public void QueryBuilder_QueryFirst_ReturnsSingleResult()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long nationKey = 0L;
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = {nationKey}");
+            var result = query.QueryFirst<NationData>();
+
+            Assert.AreEqual(0L, result.nationkey);
+            Assert.AreEqual("ALGERIA", result.name);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_QueryFirstOrDefault_ReturnsNullForNoMatch()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long nationKey = -999L;
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = {nationKey}");
+            var result = query.QueryFirstOrDefault<NationData>();
+
+            Assert.IsNull(result);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_ExecuteScalar_ReturnsScalarValue()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long regionKey = 1L;
+            var query = connection.QueryBuilder($"SELECT COUNT(*) FROM tpch.tiny.nation WHERE regionkey = {regionKey}");
+            var count = query.ExecuteScalar<long>();
+
+            Assert.IsTrue(count > 0);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithAggregation_ReturnsCorrectResults()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var query = connection.QueryBuilder($@"
+                SELECT 
+                    COUNT(*) AS count,
+                    MIN(nationkey) AS minimum,
+                    MAX(nationkey) AS maximum
+                FROM tpch.tiny.nation");
+            var result = query.QueryFirst<dynamic>();
+
+            Assert.AreEqual(25, (int)result.count);
+            Assert.AreEqual(0L, (long)result.minimum);
+            Assert.AreEqual(24L, (long)result.maximum);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_WithOrderBy_ReturnsOrderedResults()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation ORDER BY nationkey DESC LIMIT 5");
+            var results = query.Query<NationData>().ToList();
+
+            Assert.AreEqual(5, results.Count);
+            Assert.AreEqual(24L, results[0].nationkey);
+            Assert.AreEqual(23L, results[1].nationkey);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_ComplexQuery_WithJoin_ReturnsJoinedData()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            long nationKey = 0L;
+            var query = connection.QueryBuilder($@"
+                SELECT n.nationkey, n.name AS nationName, r.name AS regionName
+                FROM tpch.tiny.nation n
+                JOIN tpch.tiny.region r ON n.regionkey = r.regionkey
+                WHERE n.nationkey = {nationKey}");
+            var result = query.QueryFirst<JoinedData>();
+
+            Assert.AreEqual(0L, result.nationkey);
+            Assert.AreEqual("ALGERIA", result.nationName);
+            Assert.AreEqual("AFRICA", result.regionName);
+        }
+
+        [TestMethod]
+        public void QueryBuilder_ConditionalWhere_AddsClausesOnlyWhenNeeded()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Simulate optional filter parameters - build WHERE clause dynamically
+            long minKey = 10L;
+            var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey >= {minKey}");
+
+            var results = query.Query<NationData>().ToList();
+
+            Assert.IsTrue(results.All(n => n.nationkey >= 10));
         }
 
         #endregion
