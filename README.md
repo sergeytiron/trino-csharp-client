@@ -7,9 +7,9 @@ A streaming C# Trino client library with ADO.NET interfaces. The priorties for t
 * Response performance (fast return of rows for both short and long running queries).
 * Type support in .NET (with complex types, date time precision) and System.Data types.
 * Authentication which is customizable and flexible (to support arbitrary custom token refresh, or unique cloud requirements).
-* Full ADO.NET implementation.
+* Full ADO.NET implementation with Dapper and Dapper-QueryBuilder support.
 * Streaming with read-ahead into customizable buffer size to allow for no-wait client paging.
-* Session support, parameterized query support.
+* Session support, parameterized query support (including named parameters and list parameters for IN clauses).
 * No dependencies outside of .NET core except Newtonsoft.Json and Microsoft.Extensions.Logging. Authentication in separate library.
 * Alignment with Trino Java client, similar class structure.
 
@@ -95,6 +95,117 @@ using (TrinoConnection connection = new TrinoConnection(properties))
         }
     }
 }
+
+### Using Dapper
+
+The Trino ADO.NET client is fully compatible with [Dapper](https://github.com/DapperLib/Dapper), a popular micro-ORM for .NET. This enables you to use Dapper's concise query syntax with strongly-typed results.
+
+#### Basic Queries
+
+```csharp
+using Dapper;
+
+using var connection = new TrinoConnection(properties);
+connection.Open();
+
+// Query with strongly-typed results
+var customers = connection.Query<Customer>(
+    "SELECT custkey, name FROM tpch.tiny.customer LIMIT 5"
+).ToList();
+
+// Query first row
+var customer = connection.QueryFirst<Customer>(
+    "SELECT custkey, name FROM tpch.tiny.customer WHERE custkey = 1"
+);
+
+// Execute scalar
+var count = connection.ExecuteScalar<long>("SELECT COUNT(*) FROM tpch.tiny.nation");
+```
+
+#### Named Parameters
+
+Dapper's standard `@paramName` syntax is fully supported:
+
+```csharp
+// Single parameter
+var nation = connection.QueryFirst<Nation>(
+    "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = @key",
+    new { key = 5L }
+);
+
+// Multiple parameters
+var nations = connection.Query<Nation>(
+    "SELECT nationkey, name FROM tpch.tiny.nation WHERE regionkey = @region AND nationkey > @minKey",
+    new { region = 1L, minKey = 5L }
+).ToList();
+```
+
+#### List Parameters (IN Clauses)
+
+Pass lists or arrays directly for IN clause queries:
+
+```csharp
+var nationKeys = new List<long> { 0L, 5L, 10L };
+var nations = connection.Query<Nation>(
+    "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey IN @keys ORDER BY nationkey",
+    new { keys = nationKeys }
+).ToList();
+
+// Works with arrays and string lists too
+var names = new[] { "ALGERIA", "BRAZIL", "CANADA" };
+var results = connection.Query<Nation>(
+    "SELECT nationkey, name FROM tpch.tiny.nation WHERE name IN @names",
+    new { names }
+).ToList();
+```
+
+#### Async Support
+
+All Dapper async methods are supported:
+
+```csharp
+var customers = await connection.QueryAsync<Customer>(
+    "SELECT custkey, name FROM tpch.tiny.customer LIMIT 10"
+);
+
+var count = await connection.ExecuteScalarAsync<long>(
+    "SELECT COUNT(*) FROM tpch.tiny.nation WHERE regionkey = @region",
+    new { region = 1L }
+);
+```
+
+#### Dapper-QueryBuilder
+
+The client also works with [Dapper-QueryBuilder](https://github.com/Drizin/DapperQueryBuilder) for fluent, type-safe query building with string interpolation:
+
+```csharp
+using DapperQueryBuilder;
+
+long nationKey = 5L;
+var query = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = {nationKey}");
+var nation = query.QueryFirst<Nation>();
+
+// Dynamic query building
+string pattern = "UNITED%";
+var dynamicQuery = connection.QueryBuilder($"SELECT nationkey, name FROM tpch.tiny.nation WHERE name LIKE {pattern}");
+var nations = dynamicQuery.Query<Nation>().ToList();
+```
+
+#### Decimal Support
+
+Trino `DECIMAL` types are automatically mapped to .NET `decimal`:
+
+```csharp
+public class Order
+{
+    public long orderkey { get; set; }
+    public decimal totalprice { get; set; }  // Trino DECIMAL maps to decimal
+}
+
+var orders = connection.Query<Order>(
+    "SELECT orderkey, totalprice FROM tpch.tiny.orders LIMIT 5"
+).ToList();
+```
 
 ### Quick Start Using Trino SDK
 
