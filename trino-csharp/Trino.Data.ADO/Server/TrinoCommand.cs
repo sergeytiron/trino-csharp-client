@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Trino.Data.ADO.Client;
@@ -191,12 +192,13 @@ namespace Trino.Data.ADO.Server
         /// <returns>A task representing the asynchronous operation that returns a RecordExecutor.</returns>
         public async Task<RecordExecutor> RunQuery(long bufferSizeBytes = Constants.DefaultBufferSizeBytes)
         {
+            var queryParams = ConvertParameters(Parameters, out string processedSql);
             return await RecordExecutor.Execute(
                 logger: Logger,
                 queryStatusNotifications: connection.InfoMessage,
                 session: connection.ConnectionSession,
-                statement: CommandText,
-                queryParameters: ConvertParameters(Parameters),
+                statement: processedSql,
+                queryParameters: queryParams,
                 bufferSize: bufferSizeBytes,
                 isQuery: true,
                 cancellationToken: CancellationToken.Token).ConfigureAwait(false);
@@ -253,25 +255,76 @@ namespace Trino.Data.ADO.Server
         /// </summary>
         private async Task<RecordExecutor> RunNonQuery()
         {
+            var queryParams = ConvertParameters(Parameters, out string processedSql);
             return await RecordExecutor.Execute(
                 logger: Logger,
                 queryStatusNotifications: connection.InfoMessage,
                 session: connection.ConnectionSession,
-                statement: CommandText,
-                queryParameters: ConvertParameters(Parameters),
+                statement: processedSql,
+                queryParameters: queryParams,
                 bufferSize: Constants.DefaultBufferSizeBytes,
                 isQuery: false,
                 cancellationToken: CancellationToken.Token).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Converts ADO.NET parameters to Trino query parameters.
+        /// Converts ADO.NET parameters to Trino query parameters and processes the SQL command.
+        /// If named parameters (e.g., @paramName) are used in the SQL, they are replaced with
+        /// positional placeholders (?) and the parameters are ordered accordingly.
         /// </summary>
-        private static IEnumerable<QueryParameter> ConvertParameters(IDataParameterCollection parameters)
+        /// <param name="parameters">The parameter collection</param>
+        /// <param name="processedSql">Output: the SQL with named parameters replaced by ?</param>
+        /// <returns>The ordered list of query parameters</returns>
+        private IEnumerable<QueryParameter> ConvertParameters(IDataParameterCollection parameters, out string processedSql)
         {
-            foreach (IDataParameter parameter in parameters)
+            processedSql = CommandText;
+            
+            // Check if we have named parameters in the SQL (e.g., @paramName)
+            var namedParamMatches = Regex.Matches(CommandText, @"@(\w+)");
+            
+            if (namedParamMatches.Count > 0)
             {
-                yield return new QueryParameter(parameter.Value);
+                // Named parameters found - order parameters by their appearance in SQL
+                var orderedParams = new List<QueryParameter>();
+                foreach (Match match in namedParamMatches)
+                {
+                    string paramName = match.Groups[1].Value;
+                    IDataParameter param = null;
+                    
+                    // Find the parameter by name (case-insensitive)
+                    foreach (IDataParameter p in parameters)
+                    {
+                        if (string.Equals(p.ParameterName, paramName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            param = p;
+                            break;
+                        }
+                    }
+                    
+                    if (param != null)
+                    {
+                        orderedParams.Add(new QueryParameter(param.Value));
+                    }
+                    else
+                    {
+                        throw new ArgumentException($"Parameter '@{paramName}' was not found in the parameter collection.");
+                    }
+                }
+                
+                // Replace named parameters with positional placeholders (?)
+                processedSql = Regex.Replace(CommandText, @"@\w+", "?");
+                
+                return orderedParams;
+            }
+            else
+            {
+                // No named parameters - use positional parameters as-is
+                var result = new List<QueryParameter>();
+                foreach (IDataParameter parameter in parameters)
+                {
+                    result.Add(new QueryParameter(parameter.Value));
+                }
+                return result;
             }
         }
 

@@ -310,6 +310,122 @@ namespace Trino.Client.Test
             Assert.AreEqual("ALGERIA", results[0].name);
         }
 
+        #region Named Parameter Tests
+
+        [TestMethod]
+        public void DapperQuery_WithNamedParameter_FiltersByValue()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Use named parameter syntax (@paramName) which is standard for Dapper
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = @nationkey",
+                new { nationkey = 5L }
+            ).ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(5L, results[0].nationkey);
+            Assert.AreEqual("ETHIOPIA", results[0].name);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithMultipleNamedParameters_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Multiple named parameters
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey >= @minKey AND nationkey <= @maxKey ORDER BY nationkey",
+                new { minKey = 10L, maxKey = 15L }
+            ).ToList();
+
+            Assert.AreEqual(6, results.Count);
+            Assert.AreEqual(10L, results[0].nationkey);
+            Assert.AreEqual(15L, results[5].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithNamedStringParameter_FiltersCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Named string parameter with LIKE
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE name LIKE @pattern",
+                new { pattern = "UNITED%" }
+            ).ToList();
+
+            Assert.AreEqual(2, results.Count); // UNITED KINGDOM, UNITED STATES
+            Assert.IsTrue(results.All(n => n.name.StartsWith("UNITED")));
+        }
+
+        [TestMethod]
+        public void DapperQueryFirst_WithNamedParameter_ReturnsMatchingRow()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var result = connection.QueryFirst<CustomerData>(
+                "SELECT custkey, name, nationkey FROM tpch.tiny.customer WHERE custkey = @id",
+                new { id = 1L }
+            );
+
+            Assert.AreEqual(1L, result.custkey);
+        }
+
+        [TestMethod]
+        public void DapperExecuteScalar_WithNamedParameter_ReturnsFilteredCount()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Count nations in a specific region using named parameter
+            var count = connection.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM tpch.tiny.nation WHERE regionkey = @regionKey",
+                new { regionKey = 1L }
+            );
+
+            Assert.IsTrue(count > 0);
+        }
+
+        [TestMethod]
+        public async Task DapperQueryAsync_WithNamedParameter_ReturnsResultsAsynchronously()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var results = (await connection.QueryAsync<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = @key",
+                new { key = 0L }
+            )).ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(0L, results[0].nationkey);
+            Assert.AreEqual("ALGERIA", results[0].name);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithReusedNamedParameter_WorksCorrectly()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Same parameter used multiple times in the query
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey = @key OR nationkey = @key + 1 ORDER BY nationkey",
+                new { key = 5L }
+            ).ToList();
+
+            Assert.AreEqual(2, results.Count);
+            Assert.AreEqual(5L, results[0].nationkey);
+            Assert.AreEqual(6L, results[1].nationkey);
+        }
+
+        #endregion
+
         #region Edge Case Tests
 
         [TestMethod]
