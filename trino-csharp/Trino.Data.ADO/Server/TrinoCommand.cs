@@ -1,9 +1,11 @@
 using Trino.Client;
 using Trino.Client.Logging;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -271,6 +273,7 @@ namespace Trino.Data.ADO.Server
         /// Converts ADO.NET parameters to Trino query parameters and processes the SQL command.
         /// If named parameters (e.g., @paramName) are used in the SQL, they are replaced with
         /// positional placeholders (?) and the parameters are ordered accordingly.
+        /// Supports list parameters for IN clauses - lists are expanded into multiple placeholders.
         /// </summary>
         /// <param name="parameters">The parameter collection</param>
         /// <param name="processedSql">Output: the SQL with named parameters replaced by ?</param>
@@ -286,6 +289,9 @@ namespace Trino.Data.ADO.Server
             {
                 // Named parameters found - order parameters by their appearance in SQL
                 var orderedParams = new List<QueryParameter>();
+                var sqlBuilder = new StringBuilder(CommandText);
+                int offset = 0;  // Track offset as we replace parameters with potentially different lengths
+                
                 foreach (Match match in namedParamMatches)
                 {
                     string paramName = match.Groups[1].Value;
@@ -303,7 +309,43 @@ namespace Trino.Data.ADO.Server
                     
                     if (param != null)
                     {
-                        orderedParams.Add(new QueryParameter(param.Value));
+                        // Check if the parameter value is a list/collection (but not a string)
+                        if (param.Value is IEnumerable enumerable && !(param.Value is string))
+                        {
+                            // Expand the list into multiple placeholders
+                            var listParams = new List<QueryParameter>();
+                            foreach (var item in enumerable)
+                            {
+                                listParams.Add(new QueryParameter(item));
+                            }
+                            
+                            if (listParams.Count == 0)
+                            {
+                                throw new ArgumentException($"Parameter '@{paramName}' is an empty collection. IN clauses require at least one value.");
+                            }
+                            
+                            // Build the replacement string (e.g., "?, ?, ?")
+                            string replacement = string.Join(", ", new string('?', listParams.Count).ToCharArray());
+                            
+                            // Replace the named parameter with the expanded placeholders
+                            int startIndex = match.Index + offset;
+                            sqlBuilder.Remove(startIndex, match.Length);
+                            sqlBuilder.Insert(startIndex, replacement);
+                            offset += replacement.Length - match.Length;
+                            
+                            orderedParams.AddRange(listParams);
+                        }
+                        else
+                        {
+                            // Single value parameter
+                            orderedParams.Add(new QueryParameter(param.Value));
+                            
+                            // Replace the named parameter with a single placeholder
+                            int startIndex = match.Index + offset;
+                            sqlBuilder.Remove(startIndex, match.Length);
+                            sqlBuilder.Insert(startIndex, "?");
+                            offset += 1 - match.Length;
+                        }
                     }
                     else
                     {
@@ -311,9 +353,7 @@ namespace Trino.Data.ADO.Server
                     }
                 }
                 
-                // Replace named parameters with positional placeholders (?)
-                processedSql = Regex.Replace(CommandText, @"@\w+", "?");
-                
+                processedSql = sqlBuilder.ToString();
                 return orderedParams;
             }
             else
@@ -322,7 +362,18 @@ namespace Trino.Data.ADO.Server
                 var result = new List<QueryParameter>();
                 foreach (IDataParameter parameter in parameters)
                 {
-                    result.Add(new QueryParameter(parameter.Value));
+                    // Check if the parameter value is a list/collection (but not a string)
+                    if (parameter.Value is IEnumerable enumerable && !(parameter.Value is string))
+                    {
+                        foreach (var item in enumerable)
+                        {
+                            result.Add(new QueryParameter(item));
+                        }
+                    }
+                    else
+                    {
+                        result.Add(new QueryParameter(parameter.Value));
+                    }
                 }
                 return result;
             }

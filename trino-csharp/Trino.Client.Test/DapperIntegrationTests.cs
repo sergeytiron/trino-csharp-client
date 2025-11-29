@@ -427,6 +427,133 @@ namespace Trino.Client.Test
 
         #endregion
 
+        #region List Parameter Tests
+
+        [TestMethod]
+        public void DapperQuery_WithListParameter_FiltersWithInClause()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // List of nation keys to filter by
+            var nationKeys = new List<long> { 0L, 5L, 10L };
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey IN @keys ORDER BY nationkey",
+                new { keys = nationKeys }
+            ).ToList();
+
+            Assert.AreEqual(3, results.Count);
+            Assert.AreEqual(0L, results[0].nationkey);
+            Assert.AreEqual(5L, results[1].nationkey);
+            Assert.AreEqual(10L, results[2].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithArrayParameter_FiltersWithInClause()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Array of nation keys
+            var nationKeys = new long[] { 1L, 2L, 3L };
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey IN @keys ORDER BY nationkey",
+                new { keys = nationKeys }
+            ).ToList();
+
+            Assert.AreEqual(3, results.Count);
+            Assert.AreEqual(1L, results[0].nationkey);
+            Assert.AreEqual(2L, results[1].nationkey);
+            Assert.AreEqual(3L, results[2].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithStringListParameter_FiltersWithInClause()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // List of nation names
+            var nationNames = new List<string> { "ALGERIA", "ARGENTINA", "BRAZIL" };
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE name IN @names ORDER BY nationkey",
+                new { names = nationNames }
+            ).ToList();
+
+            Assert.AreEqual(3, results.Count);
+            Assert.IsTrue(results.All(n => nationNames.Contains(n.name)));
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithSingleItemListParameter_Works()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Single item in list
+            var nationKeys = new List<long> { 5L };
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey IN @keys",
+                new { keys = nationKeys }
+            ).ToList();
+
+            Assert.AreEqual(1, results.Count);
+            Assert.AreEqual(5L, results[0].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperQuery_WithListAndScalarParameters_WorksTogether()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            // Combine list parameter with scalar parameter
+            var regionKeys = new List<long> { 0L, 1L };
+            long minNationKey = 10L;
+            var results = connection.Query<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE regionkey IN @regions AND nationkey >= @minKey ORDER BY nationkey",
+                new { regions = regionKeys, minKey = minNationKey }
+            ).ToList();
+
+            Assert.IsTrue(results.Count > 0);
+            Assert.IsTrue(results.All(n => n.nationkey >= 10));
+        }
+
+        [TestMethod]
+        public async Task DapperQueryAsync_WithListParameter_WorksAsynchronously()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var nationKeys = new List<long> { 0L, 1L, 2L };
+            var results = (await connection.QueryAsync<NationData>(
+                "SELECT nationkey, name FROM tpch.tiny.nation WHERE nationkey IN @keys ORDER BY nationkey",
+                new { keys = nationKeys }
+            )).ToList();
+
+            Assert.AreEqual(3, results.Count);
+            Assert.AreEqual(0L, results[0].nationkey);
+            Assert.AreEqual(1L, results[1].nationkey);
+            Assert.AreEqual(2L, results[2].nationkey);
+        }
+
+        [TestMethod]
+        public void DapperExecuteScalar_WithListParameter_ReturnsCount()
+        {
+            using var connection = CreateConnection();
+            connection.Open();
+
+            var nationKeys = new List<long> { 0L, 5L, 10L, 15L, 20L };
+            var count = connection.ExecuteScalar<long>(
+                "SELECT COUNT(*) FROM tpch.tiny.nation WHERE nationkey IN @keys",
+                new { keys = nationKeys }
+            );
+
+            Assert.AreEqual(5L, count);
+        }
+
+        #endregion
+
         #region Edge Case Tests
 
         [TestMethod]
