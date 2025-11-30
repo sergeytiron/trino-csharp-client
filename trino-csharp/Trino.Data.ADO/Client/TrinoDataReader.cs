@@ -81,7 +81,7 @@ namespace Trino.Data.ADO.Client
         {
             get
             {
-                return records.GetValue<object>(i);
+                return GetValue(i);
             }
         }
 
@@ -89,7 +89,7 @@ namespace Trino.Data.ADO.Client
         {
             get
             {
-                return records.GetValue<object>(GetOrdinal(name));
+                return GetValue(GetOrdinal(name));
             }
         }
 
@@ -288,7 +288,24 @@ namespace Trino.Data.ADO.Client
 
         public override object GetValue(int i)
         {
-            return records.GetValue<object>(i);
+            var value = records.GetValue<object>(i);
+            
+            // Automatically convert TrinoBigDecimal to decimal for Dapper compatibility.
+            // If the value is too large for decimal (OverflowException), return as string representation.
+            if (value is TrinoBigDecimal bigDecimal)
+            {
+                try
+                {
+                    return bigDecimal.ToDecimal();
+                }
+                catch (OverflowException)
+                {
+                    // Return string representation for values that exceed decimal range
+                    return bigDecimal.ToString();
+                }
+            }
+            
+            return value;
         }
 
         public override int GetValues(object[] values)
@@ -300,7 +317,7 @@ namespace Trino.Data.ADO.Client
 
             for (int i = 0; values != null && i < values.Length && i < records.Columns.Count; i++)
             {
-                values[i] = records.GetValue<object>(i);
+                values[i] = GetValue(i);
             }
             return values.Length;
         }
@@ -313,7 +330,9 @@ namespace Trino.Data.ADO.Client
 
         public override bool NextResult()
         {
-            throw new NotSupportedException("Trino supports only a single result per query.");
+            // Trino supports only a single result per query.
+            // Return false to indicate there are no more result sets.
+            return false;
         }
 
         /// <summary>

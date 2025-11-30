@@ -1,9 +1,12 @@
 using Trino.Client;
 using Trino.Client.Logging;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Trino.Data.ADO.Client;
@@ -191,12 +194,13 @@ namespace Trino.Data.ADO.Server
         /// <returns>A task representing the asynchronous operation that returns a RecordExecutor.</returns>
         public async Task<RecordExecutor> RunQuery(long bufferSizeBytes = Constants.DefaultBufferSizeBytes)
         {
+            var queryParams = ConvertParameters(Parameters, out string processedSql);
             return await RecordExecutor.Execute(
                 logger: Logger,
                 queryStatusNotifications: connection.InfoMessage,
                 session: connection.ConnectionSession,
-                statement: CommandText,
-                queryParameters: ConvertParameters(Parameters),
+                statement: processedSql,
+                queryParameters: queryParams,
                 bufferSize: bufferSizeBytes,
                 isQuery: true,
                 cancellationToken: CancellationToken.Token).ConfigureAwait(false);
@@ -208,26 +212,28 @@ namespace Trino.Data.ADO.Server
 	    protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
         {
             RecordExecutor queryExecutor;
-            switch (behavior)
+
+            // CommandBehavior is a flags enum, so we need to check for specific flags
+            // rather than exact matches. We handle the primary behaviors and ignore
+            // hints like SequentialAccess and KeyInfo that don't apply to Trino.
+            bool schemaOnly = (behavior & CommandBehavior.SchemaOnly) == CommandBehavior.SchemaOnly;
+            bool singleRow = (behavior & CommandBehavior.SingleRow) == CommandBehavior.SingleRow;
+
+            if (schemaOnly)
             {
-                case CommandBehavior.Default:
-                // Single result means only run one query. Trino only supports one query.
-                case CommandBehavior.SingleResult:
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    break;
-                case CommandBehavior.SingleRow:
-                    // Single row requires the reader to be created and the first row to be read.
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    return new TrinoDataReader(queryExecutor);
-                case CommandBehavior.SchemaOnly:
-                    queryExecutor = await RunNonQuery().ConfigureAwait(false);
-                    break;
-                case CommandBehavior.CloseConnection:
-                    // Trino has no concept of a connection because every call is a new connection.
-                    queryExecutor = await RunQuery().ConfigureAwait(false);
-                    break;
-                default:
-                    throw new NotSupportedException();
+                queryExecutor = await RunNonQuery().ConfigureAwait(false);
+            }
+            else if (singleRow)
+            {
+                // Single row requires the reader to be created and the first row to be read.
+                queryExecutor = await RunQuery().ConfigureAwait(false);
+                return new TrinoDataReader(queryExecutor);
+            }
+            else
+            {
+                // Default, SingleResult, CloseConnection, SequentialAccess, KeyInfo
+                // all execute a normal query. Trino only supports one query per command.
+                queryExecutor = await RunQuery().ConfigureAwait(false);
             }
 
             // always wait for the schema when creating an IEnumerable
@@ -251,25 +257,130 @@ namespace Trino.Data.ADO.Server
         /// </summary>
         private async Task<RecordExecutor> RunNonQuery()
         {
+            var queryParams = ConvertParameters(Parameters, out string processedSql);
             return await RecordExecutor.Execute(
                 logger: Logger,
                 queryStatusNotifications: connection.InfoMessage,
                 session: connection.ConnectionSession,
-                statement: CommandText,
-                queryParameters: ConvertParameters(Parameters),
+                statement: processedSql,
+                queryParameters: queryParams,
                 bufferSize: Constants.DefaultBufferSizeBytes,
                 isQuery: false,
                 cancellationToken: CancellationToken.Token).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Converts ADO.NET parameters to Trino query parameters.
+        /// Converts ADO.NET parameters to Trino query parameters and processes the SQL command.
+        /// If named parameters (e.g., @paramName) are used in the SQL, they are replaced with
+        /// positional placeholders (?) and the parameters are ordered accordingly.
+        /// Supports list parameters for IN clauses - lists are expanded into multiple placeholders.
         /// </summary>
-        private static IEnumerable<QueryParameter> ConvertParameters(IDataParameterCollection parameters)
+        /// <param name="parameters">The parameter collection</param>
+        /// <param name="processedSql">Output: the SQL with named parameters replaced by ?</param>
+        /// <returns>The ordered list of query parameters</returns>
+        private IEnumerable<QueryParameter> ConvertParameters(IDataParameterCollection parameters, out string processedSql)
         {
-            foreach (IDataParameter parameter in parameters)
+            processedSql = CommandText;
+            
+            // Check if we have named parameters in the SQL (e.g., @paramName)
+            var namedParamMatches = Regex.Matches(CommandText, @"@(\w+)");
+            
+            if (namedParamMatches.Count > 0)
             {
-                yield return new QueryParameter(parameter.Value);
+                // Named parameters found - order parameters by their appearance in SQL
+                var orderedParams = new List<QueryParameter>();
+                var sqlBuilder = new StringBuilder(CommandText);
+                int offset = 0;  // Track offset as we replace parameters with potentially different lengths
+                
+                foreach (Match match in namedParamMatches)
+                {
+                    string paramName = match.Groups[1].Value;
+                    IDataParameter param = null;
+                    
+                    // Find the parameter by name (case-insensitive)
+                    foreach (IDataParameter p in parameters)
+                    {
+                        if (string.Equals(p.ParameterName, paramName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            param = p;
+                            break;
+                        }
+                    }
+                    
+                    if (param != null)
+                    {
+                        // Check if the parameter value is a list/collection (but not a string)
+                        if (param.Value is IEnumerable enumerable && !(param.Value is string))
+                        {
+                            // Expand the list into multiple placeholders
+                            var listParams = new List<QueryParameter>();
+                            foreach (var item in enumerable)
+                            {
+                                listParams.Add(new QueryParameter(item));
+                            }
+                            
+                            if (listParams.Count == 0)
+                            {
+                                throw new ArgumentException($"Parameter '@{paramName}' is an empty collection. IN clauses require at least one value.");
+                            }
+                            
+                            // Build the replacement string (e.g., "?, ?, ?")
+                            var placeholders = new string[listParams.Count];
+                            for (int i = 0; i < placeholders.Length; i++)
+                            {
+                                placeholders[i] = "?";
+                            }
+                            string replacement = string.Join(", ", placeholders);
+                            
+                            // Replace the named parameter with the expanded placeholders
+                            int startIndex = match.Index + offset;
+                            sqlBuilder.Remove(startIndex, match.Length);
+                            sqlBuilder.Insert(startIndex, replacement);
+                            offset += replacement.Length - match.Length;
+                            
+                            orderedParams.AddRange(listParams);
+                        }
+                        else
+                        {
+                            // Single value parameter
+                            orderedParams.Add(new QueryParameter(param.Value));
+                            
+                            // Replace the named parameter with a single placeholder
+                            int startIndex = match.Index + offset;
+                            sqlBuilder.Remove(startIndex, match.Length);
+                            sqlBuilder.Insert(startIndex, "?");
+                            offset += 1 - match.Length;
+                        }
+                    }
+                    else
+                    {
+                        throw new ArgumentException($"Parameter '@{paramName}' was not found in the parameter collection.");
+                    }
+                }
+                
+                processedSql = sqlBuilder.ToString();
+                return orderedParams;
+            }
+            else
+            {
+                // No named parameters - use positional parameters as-is
+                var result = new List<QueryParameter>();
+                foreach (IDataParameter parameter in parameters)
+                {
+                    // Check if the parameter value is a list/collection (but not a string)
+                    if (parameter.Value is IEnumerable enumerable && !(parameter.Value is string))
+                    {
+                        foreach (var item in enumerable)
+                        {
+                            result.Add(new QueryParameter(item));
+                        }
+                    }
+                    else
+                    {
+                        result.Add(new QueryParameter(parameter.Value));
+                    }
+                }
+                return result;
             }
         }
 
@@ -283,13 +394,13 @@ namespace Trino.Data.ADO.Server
 
         /// <summary>
         /// Creates and returns a new parameter object.
+        /// Note: Following standard ADO.NET pattern, this does NOT add the parameter to the collection.
+        /// The caller must explicitly add the parameter using Parameters.Add().
         /// </summary>
         /// <returns>A new DbParameter object.</returns>
         protected override DbParameter CreateDbParameter()
         {
-            var parameter = new TrinoParameter();
-            parameters.Add(parameter);
-            return parameter;
+            return new TrinoParameter();
         }
 
         /// <summary>

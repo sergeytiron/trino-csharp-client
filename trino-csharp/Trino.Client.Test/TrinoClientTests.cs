@@ -394,17 +394,15 @@ namespace Trino.Client.Test
                             Assert.AreEqual(1.7976931348623158E+308, idr.GetValue(6));
                             Assert.AreEqual("double_column", tableWithSchema.Columns[6].ToString());
 
-                            Assert.AreEqual(typeof(TrinoBigDecimal), idr.GetValue(7).GetType());
-                            Assert.AreEqual(new TrinoBigDecimal("678.12345"), idr.GetValue(7));
-                            Assert.AreEqual(new TrinoBigDecimal("678.12345").ToDecimal(), ((TrinoBigDecimal)idr.GetValue(7)).ToDecimal());
+                            // Decimals that fit in System.Decimal are returned as decimal
+                            Assert.AreEqual(typeof(decimal), idr.GetValue(7).GetType());
+                            Assert.AreEqual(678.12345m, idr.GetValue(7));
                             Assert.AreEqual("decimal_column", tableWithSchema.Columns[7].ToString());
 
-                            Assert.AreEqual(typeof(TrinoBigDecimal), idr.GetValue(8).GetType());
-                            Assert.AreEqual(new TrinoBigDecimal("123456789000000000.123400500099999999"), idr.GetValue(8));
+                            // Decimals that overflow System.Decimal are returned as string
+                            Assert.AreEqual(typeof(string), idr.GetValue(8).GetType());
+                            Assert.AreEqual("123456789000000000.123400500099999999", idr.GetValue(8));
                             Assert.AreEqual("big_decimal_column", tableWithSchema.Columns[8].ToString());
-
-                            // Test big decimal extraction fails at this scale
-                            Assert.ThrowsException<OverflowException>(() => ((TrinoBigDecimal)idr.GetValue(8)).ToDecimal());
 
                             Assert.AreEqual(typeof(Boolean), idr.GetValue(9).GetType());
                             Assert.AreEqual(true, idr.GetValue(9));
