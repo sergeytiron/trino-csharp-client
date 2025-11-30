@@ -22,12 +22,26 @@ namespace Trino.Client
         protected internal CancellationToken cancellationToken;
         protected internal ProtocolHeaders protocolHeaders;
 
+        // Shared HttpClient - designed to be long-lived and reused
+        private static readonly Lazy<HttpClient> _sharedClient = new Lazy<HttpClient>(() =>
+        {
+            var handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                UseProxy = false
+            };
+
+            var client = new HttpClient(handler) { Timeout = Constants.HttpConnectionTimeout };
+            client.DefaultRequestHeaders.AcceptEncoding.ParseAdd("gzip, deflate");
+            return client;
+        });
+
         // HTTP status codes that allow for a retry
         protected internal HashSet<HttpStatusCode> RetryableResponses = new HashSet<HttpStatusCode>() { HttpStatusCode.BadGateway, HttpStatusCode.ServiceUnavailable, HttpStatusCode.GatewayTimeout };
 
         protected AbstractClient(ClientSession session, ILoggerWrapper logger, CancellationToken cancellationToken)
         {
-            this.httpClient = new HttpClient();
+            this.httpClient = _sharedClient.Value;
             Session = session;
             this.logger = logger;
             this.cancellationToken = cancellationToken;

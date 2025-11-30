@@ -14,7 +14,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
@@ -88,71 +87,6 @@ namespace Trino.Client
         {
             this.stopwatch.Start();
             this.State = new QueryState();
-
-            HttpClientHandler handler = this.Session.Properties.CompressionDisabled ? new HttpClientHandler() : new HttpClientHandler() { AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
-
-
-            if (session.Properties.UseSystemTrustStore)
-            {
-                handler.ClientCertificateOptions = ClientCertificateOption.Automatic;
-            }
-            else
-            {
-                if (!string.IsNullOrEmpty(session.Properties.TrustedCertPath))
-                {
-                    try
-                    {
-                        X509Certificate2 cert = new X509Certificate2(session.Properties.TrustedCertPath);
-                        handler.ClientCertificates.Add(cert);
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException("Failed to load trusted certificate.", ex);
-                    }
-                }
-                else if (!string.IsNullOrEmpty(session.Properties.TrustedCertificate))
-                {
-                    try
-                    {
-                        X509Certificate2 cert = ConvertPemToX509Certificate(session.Properties.TrustedCertificate);
-                        handler.ClientCertificates.Add(cert);
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException("Failed to load trusted certificate from PEM string.", ex);
-                    }
-                }
-            }
-
-            handler.ServerCertificateCustomValidationCallback = (HttpRequestMessage, X509Certificate2, x509Chain, sslPolicyErrors) =>
-            {
-                // Allow CN mismatch
-                if (session.Properties.AllowHostNameCNMismatch
-                    && sslPolicyErrors == SslPolicyErrors.RemoteCertificateNameMismatch)
-                {
-                    return true;
-                }
-
-                // Allow self-signed certificates
-                if (session.Properties.AllowSelfSignedServerCert
-                    && sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors
-                    && x509Chain.ChainStatus.Length == 1
-                    && x509Chain.ChainStatus[0].Status == X509ChainStatusFlags.UntrustedRoot)
-                {
-                    return true;
-                }
-
-                // Default validation is not to allow any policy errors.
-                return sslPolicyErrors == SslPolicyErrors.None;
-            };
-
-            HttpClient httpClient = new HttpClient(handler);
-            this.httpClient.Timeout = Constants.HttpConnectionTimeout;
-
-            if (!this.Session.Properties.CompressionDisabled)
-            {
-                httpClient.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
-            }
         }
 
         /// <summary>

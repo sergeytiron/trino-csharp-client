@@ -37,7 +37,7 @@ namespace Trino.Client.Test
             await _trinoContainer.StartAsync();
 
             var port = _trinoContainer.GetMappedPublicPort(8080);
-            _connectionUri = $"http://localhost:{port}";
+            _connectionUri = $"http://127.0.0.1:{port}";
             
             Console.WriteLine($"Trino container started at {_connectionUri}");
         }
@@ -1144,7 +1144,7 @@ namespace Trino.Client.Test
             {
                 var port = container.GetMappedPublicPort(8080);
                 using var client = new System.Net.Http.HttpClient();
-                var response = await client.GetStringAsync($"http://localhost:{port}/v1/info");
+                var response = await client.GetStringAsync($"http://127.0.0.1:{port}/v1/info");
                 // Check if Trino has finished starting
                 return response.Contains("\"starting\":false");
             }
